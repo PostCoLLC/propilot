@@ -32,11 +32,10 @@ jobs:
           node-version: '20'
 
       - name: Pull RPT data and rebuild feed
-        working-directory: scripts
         env:
           RPT_USER: ${{ secrets.RPT_USER }}
           RPT_PASS: ${{ secrets.RPT_PASS }}
-          RPT_OUT: ../rpt-feed.json
+          RPT_OUT: rpt-feed.json
           RPT_DAYS: '60'
         run: node rpt-sync.js || echo "sync failed — keeping existing feed"
 
