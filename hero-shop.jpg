@@ -1,0 +1,53 @@
+name: Sync RPT feed
+
+# Pulls RodPumpTracker every hour, rebuilds rpt-feed.json, and publishes the
+# site to GitHub Pages automatically. No manual upload ever again.
+
+on:
+  schedule:
+    - cron: '0 * * * *'      # top of every hour (UTC). Change if you want it more/less often.
+  workflow_dispatch: {}       # lets you run it on demand from the Actions tab
+  push:
+    branches: [ main ]        # also republish whenever you edit the site
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull RPT data and rebuild feed
+        working-directory: scripts
+        env:
+          RPT_USER: ${{ secrets.RPT_USER }}
+          RPT_PASS: ${{ secrets.RPT_PASS }}
+          RPT_OUT: ../rpt-feed.json
+          RPT_DAYS: '60'
+        run: node rpt-sync.js || echo "sync failed — keeping existing rpt-feed.json"
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
