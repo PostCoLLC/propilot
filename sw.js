@@ -1,5 +1,5 @@
 /* Pro Pilot offline service worker — cache-first with background refresh */
-const CACHE = 'propilot-v15';
+const CACHE = 'propilot-v16';
 const CORE = [
   './', 'index.html', 'support.js',
   'assets/hero-shop.jpg', 'assets/facility.jpg', 'assets/svc-build.jpg',
