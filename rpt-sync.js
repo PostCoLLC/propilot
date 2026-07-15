@@ -74,9 +74,11 @@ function maxDaysRan(list) { let m = 0; (list || []).forEach(c => { const n = par
  * FIELD MAPPING — tuned to the real RodPumpTracker DataPackage response.
  * Each record is a pump run/repair record for a well.
  * ===================================================================== */
+function pipeArr(s){ return String(s||'').split('|').map(function(x){return x.trim();}).filter(function(x){return x!=='';}); }
 function mapRecord(rec) {
   const ow = rec.OilWell || {};
   const st = statusInfo(rec);
+  const nz = function(v){ return (v===0||v)?v:null; };
   return {
     name: pick(rec, ['WellName'], '') || ow.WellName || 'Well',
     api: pick(rec, ['WellApi'], '') || ow.WellApi || '',
@@ -84,29 +86,42 @@ function mapRecord(rec) {
     lease: ow.Lease || '', field: ow.FieldName || '',
     county: [ow.County, ow.State].filter(Boolean).join(', '),
     contact: pick(rec, ['Contact'], ''),
+    lat: nz(ow.Latitude), lng: nz(ow.Longitude), perfDepth: nz(ow.PerforationsDepth),
     statusRaw: st.label, tone: st.tone,
     runDate: isoDay(pick(rec, ['RunDate'], '')),
     repairDate: isoDay(pick(rec, ['RepairDate'], '')),
+    pullDate: isoDay(pick(rec, ['PullDate'], '')),
+    failDate: isoDay(pick(rec, ['FailDate'], '')),
     runDays: daysSince(pick(rec, ['RunDate'], '')),
     lastRunLife: maxDaysRan(rec.SrComponentList),
     apiDesignation: pick(rec, ['ApiDescription', 'ApiDescriptionOverride'], ''),
     pumpType: pick(rec, ['PumpType'], ''),
     pumpNo: pick(rec, ['PumpNoRan', 'PumpNo'], ''),
-    plunger: pick(rec, ['PlungerSize'], null),
-    tubing: pick(rec, ['TubingSize'], null),
-    strokeLen: pick(rec, ['StrokeLen'], null),
+    plunger: nz(pick(rec, ['PlungerSize'], null)),
+    tubing: nz(pick(rec, ['TubingSize'], null)),
+    strokeLen: nz(pick(rec, ['StrokeLen'], null)),
     shop: pick(rec, ['ShopId'], ''),
     serial: pick(rec, ['Serial'], ''),
-    failureReason: (function(){ const p = pick(rec, ['PrimaryFailureReason'], 'None'); if (p && p !== 'None') return p; const a = pick(rec, ['ActualReasonPulledDescription'], 'None'); return (a && a !== 'None') ? a : 'None'; })(),
+    failureReason: (function(){ const p = pick(rec, ['PrimaryFailureReason'], 'None'); return (p && p !== 'None') ? p : 'None'; })(),
     reasonPulled: (function(){ const a = pick(rec, ['ActualReasonPulledDescription'], 'None'); if (a && a !== 'None') return a; const b = pick(rec, ['ReasonPulledDescription'], 'None'); return (b && b !== 'None') ? b : ''; })(),
     pumpFit: pick(rec, ['PumpFit'], ''),
-    pinSize: pick(rec, ['PinSize'], null),
-    fishNeck: pick(rec, ['FishNeckSize'], null),
-    gacThread: pick(rec, ['GacThreadSize'], null),
+    pinSize: nz(pick(rec, ['PinSize'], null)),
+    fishNeck: nz(pick(rec, ['FishNeckSize'], null)),
+    gacThread: nz(pick(rec, ['GacThreadSize'], null)),
     valveRod: pick(rec, ['ValveRodSize'], ''),
     pullTube: pick(rec, ['PullTubeSize'], ''),
-    perfDepth: (ow.PerforationsDepth || null),
-    components: (rec.SrComponentList || []).map(c => ({ name: c.ComponentName, metal: c.Metallurgy, days: c.DaysRanString, fail: c.FailureCode })).filter(c => c.name),
+    plungerRings: nz(pick(rec, ['PlungerRings'], null)),
+    plungerCups: nz(pick(rec, ['PlungerCups'], null)),
+    valveClearance: nz(pick(rec, ['ValveClearance'], null)),
+    tvUpper: pick(rec, ['TValveUBallTypeString'], ''), tvLower: pick(rec, ['TValveLBallTypeString'], ''),
+    svUpper: pick(rec, ['SValveUBallTypeString'], ''), svLower: pick(rec, ['SValveLBallTypeString'], ''),
+    vacuumTest: nz(pick(rec, ['VacuumTest'], null)),
+    plungerRun: pipeArr(rec.PlungerRunString), plungerPull: pipeArr(rec.PlungerPullString),
+    barrelRun: pipeArr(rec.BarrelRunString), barrelPull: pipeArr(rec.BarrelPullString),
+    fmAcid: pick(rec, ['ForeignMaterialAcidSoluble'], ''), fmSamples: pick(rec, ['ForeignMaterialSamplesTaken'], ''),
+    fmSeverity: pick(rec, ['ForeignMaterialSeverity'], ''), fmDesc: pick(rec, ['ForeignMatDesc'], ''),
+    notes: pick(rec, ['AddlInfo', 'ScNotes'], ''),
+    components: (rec.SrComponentList || []).map(function(c){ return { name: c.ComponentName, metal: c.Metallurgy, coating: c.SurfaceCoating, days: c.DaysRanString, fail: c.FailureCode, part: c.PartNumber, notes: c.Notes, primary: c.IsPrimaryFailure, severity: c.Severity, remedy: c.Remedy, placement: c.Placement }; }).filter(function(c){ return c.name; }),
   };
 }
 
@@ -114,10 +129,15 @@ function mapRecord(rec) {
 function dedupeLatest(wells) {
   const groups = {};
   for (const w of wells) { const k = w.api || w.name; (groups[k] = groups[k] || []).push(w); }
+  // Most recent service event across a record's dates (junked pumps have no runDate).
+  function eventDate(r){ return [r.repairDate, r.pullDate, r.failDate, r.runDate].filter(Boolean).sort().pop() || ''; }
+  function isTeardown(r){ return /junk|repair/i.test(String(r.statusRaw||'')); }
   return Object.values(groups).map(function(recs){
-    recs.sort(function(a,b){ return (b.runDate||'').localeCompare(a.runDate||''); });
-    const cur = Object.assign({}, recs[0]);
-    cur.history = recs.map(function(r){ return { runDate:r.runDate, repairDate:r.repairDate, apiDesignation:r.apiDesignation, pumpType:r.pumpType, statusRaw:r.statusRaw, tone:r.tone, lastRunLife:r.lastRunLife, failureReason:r.failureReason, reasonPulled:r.reasonPulled, shop:r.shop, serial:r.serial, components:r.components }; });
+    recs.sort(function(a,b){ return eventDate(b).localeCompare(eventDate(a)); });
+    // Report/current record = most recent Junked or Repaired (teardown) record; fall back to newest event.
+    var teardowns = recs.filter(isTeardown);
+    var cur = Object.assign({}, (teardowns.length ? teardowns[0] : recs[0]));
+    cur.history = recs.map(function(r){ return { runDate:r.runDate, repairDate:r.repairDate, apiDesignation:r.apiDesignation, pumpType:r.pumpType, statusRaw:r.statusRaw, tone:r.tone, lastRunLife:r.lastRunLife, failureReason:r.failureReason, reasonPulled:r.reasonPulled, shop:r.shop, serial:r.serial }; });
     return cur;
   }).sort(function(a,b){ return (a.operator||'').localeCompare(b.operator||'') || (a.name||'').localeCompare(b.name||''); });
 }
@@ -196,7 +216,7 @@ async function main() {
     accounts: loadAccounts(fs),
     wells,
   };
-  fs.writeFileSync(OUT, JSON.stringify(feed, null, 2));
+  fs.writeFileSync(OUT, JSON.stringify(feed));
   console.log(`Wrote ${OUT} with ${wells.length} wells across ${new Set(wells.map(w=>w.operator).filter(Boolean)).size} operator(s).`);
   if (!wells.length) {
     console.log('\n⚠️  No wells returned across the whole range.');
