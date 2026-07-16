@@ -210,6 +210,20 @@ async function main() {
 
   const wells = dedupeLatest(all.map(mapRecord));
 
+  // GUARD: never overwrite a healthy feed with a truncated pull.
+  // Compare against the most complete existing feed (sync folder OR repo root).
+  try {
+    let prevN = 0;
+    for (const p of [OUT, '../rpt-feed.json', 'rpt-feed.json']) {
+      try { if (fs.existsSync(p)) { const prev = JSON.parse(fs.readFileSync(p, 'utf8')); prevN = Math.max(prevN, (prev.wells || []).length); } } catch (e) {}
+    }
+    if (prevN > 50 && wells.length < prevN * 0.75) {
+      console.error(`\n⛔ Truncated pull detected: got ${wells.length} wells vs ${prevN} in the existing feed.`);
+      console.error('   Keeping the existing feed to avoid clobbering good data. Re-run when RPT is fully reachable.');
+      process.exit(1);
+    }
+  } catch (e) { /* no readable previous feed — proceed */ }
+
   const feed = {
     customer: 'All Wells',
     updated: new Date().toISOString(),
