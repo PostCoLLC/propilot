@@ -1,0 +1,44 @@
+{
+  "propilot@postcompaniesllc.com": {
+    "staff": true
+  },
+  "djackson@postcompaniesllc.com": {
+    "staff": true
+  },
+  "@blackbeardoperating.com": {
+    "operator": "Blackbeard Operating"
+  },
+  "@blackbeardcontractor.com": {
+    "operator": "Blackbeard Operating"
+  },
+  "@slantenergy.com": {
+    "operator": "Slant Operating"
+  },
+  "@walshwatts.com": {
+    "operator": "Walsh & Watts Inc"
+  },
+  "@scoutep.com": {
+    "operator": "SCOUT ENERGY PARTNERS"
+  },
+  "@williams-oil.com": {
+    "operator": "Williams Oil"
+  },
+  "@pittsenergy.com": {
+    "operator": "Pitts Energy"
+  },
+  "@flattopresources.com": {
+    "operator": "Flat Top Operating, LLC"
+  },
+  "@chevaloilandgas.com": {
+    "operator": "Cheval Oil and Gas LLC"
+  },
+  "@formenteraops.com": {
+    "operator": "Formentera Operations, LLC"
+  },
+  "@trpenergy.com": {
+    "operator": "TRP Energy LLC"
+  },
+  "@atlascorpusa.com": {
+    "operator": "Smc Oil And Gas"
+  }
+}
