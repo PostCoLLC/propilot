@@ -1,0 +1,69 @@
+name: Sync RPT feed
+
+on:
+  schedule:
+    - cron: '0 6 * * *'          # once daily, 6am UTC (the 5-year sweep is heavy)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Verify credentials are present
+        env:
+          RPT_USER: ${{ secrets.RPT_USER }}
+          RPT_PASS: ${{ secrets.RPT_PASS }}
+        run: |
+          if [ -z "$RPT_USER" ] || [ -z "$RPT_PASS" ]; then
+            echo "::error::RPT_USER / RPT_PASS secrets are not set. Add them in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "Credentials present."
+
+      - name: Pull RPT data and rebuild feed
+        env:
+          RPT_USER: ${{ secrets.RPT_USER }}
+          RPT_PASS: ${{ secrets.RPT_PASS }}
+          RPT_OUT: rpt-feed.json
+          RPT_DAYS: '1825'
+          RPT_CONC: '24'
+        run: node rpt-sync.js
+
+      - name: Confirm the feed actually refreshed
+        run: |
+          node -e "
+            const f=require('./rpt-feed.json');
+            const ageH=(Date.now()-new Date(f.updated))/3.6e6;
+            console.log('feed updated:',f.updated,'| wells:',f.wells.length,'| inventory:',(f.inventory||[]).length);
+            if(ageH>2){ console.error('::error::Feed is '+ageH.toFixed(1)+'h old - it was NOT rewritten.'); process.exit(1); }
+          "
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
