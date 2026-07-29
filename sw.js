@@ -1,5 +1,5 @@
 /* Pro Pilot offline service worker — network-first for the app page, cache-first for assets */
-const CACHE = 'propilot-v48';
+const CACHE = 'propilot-v49';
 const CORE = [
   './', 'index.html', 'support.js',
   'assets/hero-shop.jpg', 'assets/facility.jpg', 'assets/svc-build.jpg',
