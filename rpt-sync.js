@@ -148,7 +148,43 @@ function dedupeLatest(wells) {
     // Report/current record = most recent Junked or Repaired (teardown) record; fall back to newest event.
     var teardowns = recs.filter(isTeardown);
     var cur = Object.assign({}, (teardowns.length ? teardowns[0] : recs[0]));
-    cur.history = recs.map(function(r){ return { runDate:r.runDate, repairDate:r.repairDate, apiDesignation:r.apiDesignation, pumpType:r.pumpType, statusRaw:r.statusRaw, tone:r.tone, lastRunLife:r.lastRunLife, failureReason:r.failureReason, reasonPulled:r.reasonPulled, shop:r.shop, serial:r.serial, notes:r.notes, pullDate:r.pullDate }; });
+
+    // Consolidate history into ONE row per physical pump (serial).
+    // RPT emits a record per status change (New -> Run -> Repair/Junked) AND the day-sweep
+    // returns the same record on multiple days, so a single pump run can appear 8+ times.
+    var bySerial = {}, order = [];
+    recs.forEach(function(r){
+      var key = r.serial || ('noserial|' + (r.runDate || r.repairDate || '') + '|' + r.apiDesignation);
+      if (!bySerial[key]) { bySerial[key] = []; order.push(key); }
+      bySerial[key].push(r);
+    });
+    cur.history = order.map(function(key){
+      var g = bySerial[key];
+      var pick1 = function(field){ for (var i=0;i<g.length;i++) if (g[i][field]) return g[i][field]; return ''; };
+      var dates = function(field){ return g.map(function(r){ return r[field]; }).filter(Boolean).sort(); };
+      var runs = dates('runDate'), repairs = dates('repairDate'), pulls = dates('pullDate');
+      var teardown = g.filter(function(r){ return isTeardown(r); })[0] || null;
+      var lives = g.map(function(r){ return r.lastRunLife; }).filter(function(v){ return v != null && v > 0; });
+      var notes = g.map(function(r){ return String(r.notes || ''); }).sort(function(a,b){ return b.length - a.length; })[0] || '';
+      var fail = teardown && teardown.failureReason && teardown.failureReason !== 'None'
+        ? teardown.failureReason : pick1('failureReason');
+      return {
+        serial: g[0].serial || '',
+        runDate: runs[0] || '',                          // first installed
+        repairDate: repairs[repairs.length-1] || '',      // last shop event
+        pullDate: pulls[pulls.length-1] || '',
+        statusRaw: (teardown ? teardown.statusRaw : g[0].statusRaw) || '',
+        tone: (teardown ? teardown.tone : g[0].tone) || '',
+        lastRunLife: lives.length ? Math.max.apply(null, lives) : null,
+        failureReason: fail,
+        reasonPulled: (teardown && teardown.reasonPulled) || pick1('reasonPulled'),
+        apiDesignation: pick1('apiDesignation'),
+        pumpType: pick1('pumpType'),
+        shop: pick1('shop'),
+        notes: notes,
+        records: g.length                                 // how many RPT rows collapsed into this
+      };
+    });
     return cur;
   }).sort(function(a,b){ return (a.operator||'').localeCompare(b.operator||'') || (a.name||'').localeCompare(b.name||''); });
 }
