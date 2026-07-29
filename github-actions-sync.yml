@@ -1,0 +1,72 @@
+# Auto-sync RPT data into rpt-feed.json and deploy it.
+#
+# SETUP (one time):
+#   1. Put this repo on GitHub with the app files (index.html, assets/, etc.)
+#      and this rpt-sync/ folder.
+#   2. Repo → Settings → Secrets and variables → Actions → New repository secret:
+#         RPT_USER   = postauto
+#         RPT_PASS   = Postauto0226
+#   3. Decide how the feed is published (see the "Publish" step near the bottom).
+#
+# It runs hourly (and on-demand from the Actions tab). Adjust the cron as needed.
+
+name: Sync RPT feed
+
+on:
+  schedule:
+    - cron: '0 * * * *'      # top of every hour (UTC)
+  workflow_dispatch: {}       # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Pull RPT data and build feed
+        working-directory: rpt-sync
+        env:
+          RPT_USER: ${{ secrets.RPT_USER }}
+          RPT_PASS: ${{ secrets.RPT_PASS }}
+          RPT_OUT: rpt-feed.json
+          RPT_DAYS: '1825'
+          RPT_CONC: '24'
+        run: node rpt-sync.js
+
+      # Copy the fresh feed to where the app is served.
+      # If the app lives at the repo root next to index.html, this is right.
+      # If it lives in /deploy, change the destination to deploy/rpt-feed.json.
+      - name: Move feed next to the app
+        run: cp rpt-sync/rpt-feed.json rpt-feed.json
+
+      - name: Commit updated feed
+        run: |
+          git config user.name  "rpt-sync bot"
+          git config user.email "propilot@postcompaniesllc.com"
+          git add rpt-feed.json
+          git diff --staged --quiet || git commit -m "chore: refresh RPT feed [skip ci]"
+          git push
+
+      # ---- PUBLISH (pick ONE that matches your hosting) ------------------
+      #
+      # A) GitHub Pages: enable Pages on this repo (Settings → Pages → deploy
+      #    from branch). The committed rpt-feed.json + index.html serve directly.
+      #    Nothing more to do here.
+      #
+      # B) tiiny.host / other static host: automation can't re-upload for you.
+      #    Simplest is to move the whole site to GitHub Pages (option A) so this
+      #    workflow fully closes the loop. Otherwise you re-upload rpt-feed.json
+      #    manually after each change — which defeats the automation.
+      #
+      # C) Netlify / Cloudflare Pages connected to this repo: the commit above
+      #    triggers their auto-deploy. Nothing more to do here.

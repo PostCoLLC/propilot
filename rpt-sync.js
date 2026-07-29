@@ -205,22 +205,30 @@ async function main() {
   const all = [];           // every raw record across all days
   let anyOk = false, daysWithData = 0;
   const summary = [];
-  for (const ep of ENDPOINTS) {
-    for (const day of days) {
-      const ds = fmtDate(day, 'YYYY-MM-DD');
+  const CONC = parseInt(process.env.RPT_CONC || '24', 10);   // parallel day requests
+  async function pullDay(day) {
+    const ds = fmtDate(day, 'YYYY-MM-DD');
+    for (const ep of ENDPOINTS) {
       for (const url of candidates(ep, ds)) {
         try {
           const data = await getJson(url);
           anyOk = true;
           const recs = extractRecords(data);
-          if (recs.length) { all.push.apply(all, recs); daysWithData++; summary.push(`  ${ds}: ${recs.length} records`); }
-          break; // this URL style worked for this date; move to next date
+          if (recs.length) { daysWithData++; summary.push(`  ${ds}: ${recs.length} records`); }
+          return recs;
         } catch (e) {
-          if (url.includes('?')) { /* try path style next */ }
-          else summary.push(`  ${ds}: ${e.message}`);
+          if (!url.includes('?')) summary.push(`  ${ds}: ${e.message}`);
         }
       }
     }
+    return [];
+  }
+  // Parallel batches — 1,825 sequential requests never finishes inside a CI job.
+  for (let i = 0; i < days.length; i += CONC) {
+    const batch = days.slice(i, i + CONC);
+    const results = await Promise.all(batch.map(function(d){ return pullDay(d).catch(function(){ return []; }); }));
+    results.forEach(function(recs){ if (recs && recs.length) all.push.apply(all, recs); });
+    if (i % (CONC * 20) === 0) console.log(`  ...${Math.min(i + CONC, days.length)}/${days.length} days, ${all.length} records`);
   }
   console.log(`Pulled ${all.length} records across ${daysWithData} day(s) in the last ${RANGE}.`);
   if (summary.length) console.log(summary.slice(0, 40).join('\n'));
@@ -228,8 +236,11 @@ async function main() {
   if (!anyOk) { console.error('No response from RPT. Check credentials / network.'); process.exit(1); }
 
   // Save the raw merged records so field names / operators can be confirmed.
-  fs.writeFileSync('rpt-raw.json', JSON.stringify(all, null, 2));
-  console.log('Saved raw merged records to rpt-raw.json');
+  // Raw dump is debug-only — it can reach 150 MB+. Enable with RPT_RAW=1.
+  if (process.env.RPT_RAW === '1') {
+    fs.writeFileSync('rpt-raw.json', JSON.stringify(all, null, 2));
+    console.log('Saved raw merged records to rpt-raw.json');
+  }
 
   const wells = dedupeLatest(all.map(mapRecord));
 
