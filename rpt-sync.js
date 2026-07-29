@@ -36,12 +36,23 @@ function fmtDate(d, fmt) {
   return `${y}-${m}-${day}`;
 }
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url.replace(PASS, '***')}`);
-  const text = await res.text();
-  try { return JSON.parse(text); }
-  catch (e) { throw new Error(`Non-JSON response: ${text.slice(0, 120)}`); }
+async function getJson(url, tries) {
+  tries = tries || 4;
+  let lastErr;
+  for (let a = 1; a <= tries; a++) {
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url.replace(PASS, '***')}`);
+      const text = await res.text();
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error(`Non-JSON response: ${text.slice(0, 120)}`); }
+    } catch (e) {
+      lastErr = e;
+      if (a < tries) await new Promise(r => setTimeout(r, 400 * Math.pow(2, a - 1) + Math.random() * 300));
+    }
+  }
+  throw lastErr;
 }
 
 // Pull a value from an object trying several possible key names (case-insensitive).
@@ -67,6 +78,7 @@ function statusInfo(rec) {
   return { label: pick(rec, ['Status'], '—'), tone: 'ok' };
 }
 function isoDay(v) { return (v && !String(v).startsWith('0001')) ? String(v).slice(0, 10) : ''; }
+function nz(v) { return (v === 0 || v) ? v : null; }
 function daysSince(v) { const d = isoDay(v); if (!d) return null; const n = Math.round((Date.now() - new Date(d + 'T12:00:00').getTime()) / 86400000); return n >= 0 ? n : null; }
 function maxDaysRan(list) { let m = 0; (list || []).forEach(c => { const n = parseInt(c.DaysRanString, 10); if (!isNaN(n) && n > m) m = n; }); return m || null; }
 
@@ -78,7 +90,6 @@ function pipeArr(s){ return String(s||'').split('|').map(function(x){return x.tr
 function mapRecord(rec) {
   const ow = rec.OilWell || {};
   const st = statusInfo(rec);
-  const nz = function(v){ return (v===0||v)?v:null; };
   return {
     name: pick(rec, ['WellName'], '') || ow.WellName || 'Well',
     api: pick(rec, ['WellApi'], '') || ow.WellApi || '',
@@ -203,7 +214,7 @@ async function main() {
   }
 
   const all = [];           // every raw record across all days
-  let anyOk = false, daysWithData = 0;
+  let anyOk = false, daysWithData = 0, daysFailed = 0;
   const summary = [];
   const CONC = parseInt(process.env.RPT_CONC || '24', 10);   // parallel day requests
   async function pullDay(day) {
@@ -217,7 +228,7 @@ async function main() {
           if (recs.length) { daysWithData++; summary.push(`  ${ds}: ${recs.length} records`); }
           return recs;
         } catch (e) {
-          if (!url.includes('?')) summary.push(`  ${ds}: ${e.message}`);
+          if (!url.includes('?')) { daysFailed++; summary.push(`  ${ds}: ${e.message}`); }
         }
       }
     }
@@ -230,7 +241,8 @@ async function main() {
     results.forEach(function(recs){ if (recs && recs.length) all.push.apply(all, recs); });
     if (i % (CONC * 20) === 0) console.log(`  ...${Math.min(i + CONC, days.length)}/${days.length} days, ${all.length} records`);
   }
-  console.log(`Pulled ${all.length} records across ${daysWithData} day(s) in the last ${RANGE}.`);
+  console.log(`Pulled ${all.length} records across ${daysWithData} day(s) in the last ${RANGE}. Failed days: ${daysFailed}.`);
+  if (daysFailed > RANGE * 0.2) console.error(`::warning::${daysFailed}/${RANGE} day requests failed — RPT may be throttling. Lower RPT_CONC.`);
   if (summary.length) console.log(summary.slice(0, 40).join('\n'));
 
   if (!anyOk) { console.error('No response from RPT. Check credentials / network.'); process.exit(1); }
