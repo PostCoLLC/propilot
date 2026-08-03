@@ -30,6 +30,11 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Verify the app is actually here
+        run: |
+          test -f index.html || { echo "::error::index.html missing from the repo root - Pages would deploy an empty site."; exit 1; }
+          echo "index.html present ($(wc -c < index.html) bytes)."
+
       - name: Verify credentials are present
         env:
           RPT_USER: ${{ secrets.RPT_USER }}
@@ -42,10 +47,11 @@ jobs:
           echo "Credentials present."
 
       - name: Pull RPT data and rebuild feed
+        working-directory: scripts
         env:
           RPT_USER: ${{ secrets.RPT_USER }}
           RPT_PASS: ${{ secrets.RPT_PASS }}
-          RPT_OUT: rpt-feed.json
+          RPT_OUT: ../rpt-feed.json
           RPT_DAYS: '1825'
           RPT_CONC: '24'
         run: node rpt-sync.js
