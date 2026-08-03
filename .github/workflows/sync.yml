@@ -2,7 +2,7 @@ name: Sync RPT feed
 
 on:
   schedule:
-    - cron: '0 6 * * *'          # once daily, 6am UTC (the 5-year sweep is heavy)
+   - cron: '0 14 * * *'          # once daily, 6am UTC (the 5-year sweep is heavy)
   workflow_dispatch: {}
 
 permissions:
