@@ -152,9 +152,14 @@ function dedupeLatest(wells) {
     // Consolidate history into ONE row per physical pump (serial).
     // RPT emits a record per status change (New -> Run -> Repair/Junked) AND the day-sweep
     // returns the same record on multiple days, so a single pump run can appear 8+ times.
+    // One physical pump can be reinstalled later, so group by serial AND run, not serial alone:
+    // a new runDate for a serial we have already closed out starts a fresh group.
     var bySerial = {}, order = [];
     recs.forEach(function(r){
-      var key = r.serial || ('noserial|' + (r.runDate || r.repairDate || '') + '|' + r.apiDesignation);
+      var ser = String(r.serial || '').trim().toLowerCase();
+      var key = ser
+        ? ser + '|' + (r.runDate || '')
+        : 'noserial|' + (r.runDate || r.repairDate || '') + '|' + r.apiDesignation;
       if (!bySerial[key]) { bySerial[key] = []; order.push(key); }
       bySerial[key].push(r);
     });
@@ -185,6 +190,25 @@ function dedupeLatest(wells) {
         records: g.length                                 // how many RPT rows collapsed into this
       };
     });
+    // Collapse rows that describe the same pump+run (the day-sweep can emit a serial under
+    // both a run record and a later teardown record), then order strictly by event date.
+    var merged = {}, mOrder = [];
+    cur.history.forEach(function(h){
+      var k = (String(h.serial||'').trim().toLowerCase() || 'x') + '|' + (h.runDate || h.repairDate || '');
+      var prev = merged[k];
+      if (!prev) { merged[k] = h; mOrder.push(k); return; }
+      prev.runDate = prev.runDate || h.runDate;
+      if ((h.repairDate||'') > (prev.repairDate||'')) prev.repairDate = h.repairDate;
+      if ((h.pullDate||'') > (prev.pullDate||'')) prev.pullDate = h.pullDate;
+      if (h.lastRunLife != null && (prev.lastRunLife == null || h.lastRunLife > prev.lastRunLife)) prev.lastRunLife = h.lastRunLife;
+      if (String(h.notes||'').length > String(prev.notes||'').length) prev.notes = h.notes;
+      if (isTeardown(h)) { prev.statusRaw = h.statusRaw; prev.tone = h.tone; }
+      if (h.failureReason && h.failureReason !== 'None') prev.failureReason = h.failureReason;
+      prev.reasonPulled = prev.reasonPulled || h.reasonPulled;
+      prev.records += h.records;
+    });
+    cur.history = mOrder.map(function(k){ return merged[k]; })
+      .sort(function(a, b){ return eventDate(b).localeCompare(eventDate(a)); });
     return cur;
   }).sort(function(a,b){ return (a.operator||'').localeCompare(b.operator||'') || (a.name||'').localeCompare(b.name||''); });
 }
@@ -210,6 +234,25 @@ function buildInventory(all, toWell) {
   const seen = {}, out = [];
   for (const it of items) { const k = it.serial || (it.apiDesignation + '|' + it.ready); if (seen[k]) continue; seen[k] = 1; out.push(it); }
   return out;
+}
+
+// A shelf pump is no longer available once it goes back downhole: drop any item whose
+// serial has a run date later than the day it was inventoried.
+function pruneInstalled(inventory, wells) {
+  const ran = {};
+  const note = function(serial, date){
+    const s = String(serial || '').trim().toLowerCase();
+    if (!s || !date) return;
+    if (!ran[s] || date > ran[s]) ran[s] = date;
+  };
+  wells.forEach(function(w){
+    note(w.serial, w.runDate);
+    (w.history || []).forEach(function(h){ note(h.serial, h.runDate); });
+  });
+  return inventory.filter(function(it){
+    const s = String(it.serial || '').trim().toLowerCase();
+    return !(s && it.ready && ran[s] && ran[s] > it.ready);
+  });
 }
 
 // Find the array of well records wherever RPT nests it.
@@ -306,7 +349,9 @@ async function main() {
     }
   } catch (e) { /* no readable previous feed — proceed */ }
 
-  const inventory = buildInventory(all, mapRecord);
+  const inventoryAll = buildInventory(all, mapRecord);
+  const inventory = pruneInstalled(inventoryAll, wells);
+  const pruned = inventoryAll.length - inventory.length;
   // Inventory records sometimes lack OperatorName — inherit it from the well it last ran in.
   (function(){
     const byName = {};
@@ -322,7 +367,7 @@ async function main() {
   };
   fs.writeFileSync(OUT, JSON.stringify(feed));
   console.log(`Wrote ${OUT} with ${wells.length} wells across ${new Set(wells.map(w=>w.operator).filter(Boolean)).size} operator(s).`);
-  console.log(`Shelf inventory: ${inventory.length} pump(s) ready to run.`);
+  console.log(`Shelf inventory: ${inventory.length} pump(s) ready to run (${pruned} excluded \u2014 already reinstalled).`);
   if (!wells.length) {
     console.log('\n⚠️  No wells returned across the whole range.');
     console.log('   Login + API address work (server replied). Likely the "postauto" account');
