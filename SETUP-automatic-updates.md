@@ -1,3 +1,5 @@
+[SETUP-automatic-updates.md](https://github.com/user-attachments/files/30678950/SETUP-automatic-updates.md)
+
 # Pro Pilot — Fully Automatic RPT Updates (setup once, then hands-off)
 
 This folder is a ready-to-publish website. Once set up, GitHub pulls your
