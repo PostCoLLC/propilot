@@ -1,5 +1,5 @@
 /* Pro Pilot offline service worker — network-first for the app page, cache-first for assets */
-const CACHE = 'propilot-v52';
+const CACHE = 'propilot-v55';
 const CORE = [
   './', 'index.html', 'support.js',
   'assets/hero-shop.jpg', 'assets/facility.jpg', 'assets/svc-build.jpg',
@@ -25,8 +25,9 @@ function isAppShell(req) {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  // Network-first for the app page so the newest build always loads when online.
-  if (isAppShell(req)) {
+  // Network-first for the app page and the well feed so the newest build and data always load
+  // when online; a cached feed only ever answers offline.
+  if (isAppShell(req) || /rpt-feed\.json$/.test(new URL(req.url).pathname)) {
     e.respondWith(
       fetch(req).then((res) => {
         try { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } catch (_) {}

@@ -108,6 +108,8 @@ function mapRecord(rec) {
     apiDesignation: pick(rec, ['ApiDescription', 'ApiDescriptionOverride'], ''),
     pumpType: pick(rec, ['PumpType'], ''),
     pumpNo: pick(rec, ['PumpNoRan', 'PumpNo'], ''),
+    // RPT's own word for a pump that came off the well and went to the shelf.
+    pumpNoRan: pick(rec, ['PumpNoRan'], ''),
     plunger: nz(pick(rec, ['PlungerSize'], null)),
     tubing: nz(pick(rec, ['TubingSize'], null)),
     strokeLen: nz(pick(rec, ['StrokeLen'], null)),
@@ -209,6 +211,73 @@ function dedupeLatest(wells) {
     });
     cur.history = mOrder.map(function(k){ return merged[k]; })
       .sort(function(a, b){ return eventDate(b).localeCompare(eventDate(a)); });
+
+    // Repair-and-return consolidation.
+    // RPT writes the teardown (Repair/Junked) and the reinstall as separate rows even when the
+    // SAME pump goes straight back into the SAME well. In the shop that is one job — a repair
+    // and return, "R&R" — so fold the teardown row into the run that follows it. Dates can land
+    // either side of each other because the shop closes the repair ticket after the pump ships,
+    // so match on a window, not on order.
+    var DAY = 86400000;
+    var ts = function(d){ return d ? new Date(d + 'T00:00:00').getTime() : null; };
+    var shopDay = function(h){ return [h.repairDate, h.pullDate, h.failDate].filter(Boolean).sort().pop() || ''; };
+    var dropped = {};
+    cur.history.forEach(function(t, ti){
+      if (t.runDate || !isTeardown(t)) return;
+      var td = ts(shopDay(t)); if (td == null) return;
+      var ser = String(t.serial || '').trim().toLowerCase(); if (!ser) return;
+      for (var i = 0; i < cur.history.length; i++) {
+        var r = cur.history[i];
+        if (i === ti || dropped[i] || !r.runDate) continue;
+        if (String(r.serial || '').trim().toLowerCase() !== ser) continue;
+        if (Math.abs(ts(r.runDate) - td) > 14 * DAY) continue;
+        r.jobType = 'R&R';
+        r.repairDate = [r.repairDate, t.repairDate].filter(Boolean).sort().pop() || '';
+        r.pullDate = [r.pullDate, t.pullDate].filter(Boolean).sort().pop() || '';
+        if (t.failureReason && t.failureReason !== 'None' && (!r.failureReason || r.failureReason === 'None')) r.failureReason = t.failureReason;
+        r.reasonPulled = r.reasonPulled || t.reasonPulled;
+        if (String(t.notes || '').length > String(r.notes || '').length) r.notes = t.notes;
+        if (t.lastRunLife != null && (r.lastRunLife == null || t.lastRunLife > r.lastRunLife)) r.lastRunLife = t.lastRunLife;
+        r.records += t.records;
+        dropped[ti] = 1;
+        break;
+      }
+    });
+    cur.history = cur.history.filter(function(h, i){ return !dropped[i]; });
+    // Second R&R signal: the shop writes "Pump sent to location: <spec>" in the notes.
+    // "None", "TA", "Did not run our pump" mean nothing went back; an actual pump
+    // description (20-125-RHBC-20-4-0-0 BBO-262) means a pump was returned to the well
+    // even when RPT never wrote the Run row.
+    var decodeNotes = function(s){ return String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim(); };
+    var sentTo = function(n){ var m = decodeNotes(n).match(/Pump sent to location:\s*(.*?)\s*(?:Job\s*overview:|$)/i); return m ? m[1].trim().replace(/[,;]\s*$/, '') : ''; };
+    var isPumpSpec = function(s){ return /\d{2}\s*-\s*\d{3}\s*-\s*[A-Z]{3,4}/i.test(s); };
+    cur.history.forEach(function(h){
+      var s = sentTo(h.notes);
+      if (isPumpSpec(s)) h.pumpSentTo = s;
+      if (h.jobType) return;
+      if (!h.runDate) h.jobType = h.pumpSentTo ? 'R&R' : (/junk/i.test(h.statusRaw || '') ? 'Junked' : 'Teardown');
+      else h.jobType = isTeardown(h) ? 'Completed run' : 'Install';
+    });
+
+    // If the record we picked as current is a teardown but the same pump went back in
+    // (R&R), the well is running — carry the run forward so it is not reported as
+    // "no install on record".
+    var newest = cur.history[0];
+    // Shop notes live on the well record, not the history row, so the newest job reads
+    // its "pump sent to location" from there.
+    var curSent = sentTo(cur.notes) || (newest ? sentTo(newest.notes) : '');
+    if (newest && isPumpSpec(curSent)) {
+      newest.pumpSentTo = curSent;
+      if (!newest.runDate) newest.jobType = 'R&R';
+    }
+    if (newest && !cur.runDate && newest.runDate) {
+      cur.runDate = newest.runDate;
+      cur.runDays = Math.round((Date.now() - new Date(newest.runDate + 'T12:00:00').getTime()) / DAY);
+      cur.statusRaw = 'Run';
+      cur.tone = 'ok';
+    }
+    cur.jobType = newest ? newest.jobType : '';
+    cur.pumpSentTo = newest ? (newest.pumpSentTo || '') : '';
     return cur;
   }).sort(function(a,b){ return (a.operator||'').localeCompare(b.operator||'') || (a.name||'').localeCompare(b.name||''); });
 }
