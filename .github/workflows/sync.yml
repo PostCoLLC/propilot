@@ -1,26 +1,25 @@
-name: Sync RPT feed
+name: Sync RPT feed and deploy
+
+# Two jobs on purpose. The RPT pull and the site deploy used to be one job, so any RPT
+# outage also blocked publishing app fixes. Now `deploy` runs even when `sync` fails —
+# it just publishes the feed already in the repo.
 
 on:
   schedule:
-   - cron: '0 14 * * *'          # once daily, 6am UTC (the 5-year sweep is heavy)
+    - cron: '0 14 * * *'          # once daily, 14:00 UTC (the 5-year sweep is heavy)
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
-  build-and-deploy:
+  sync:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: rpt-sync            # not the pages group: a manual run must not kill a scheduled one
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -29,11 +28,6 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '24'
-
-      - name: Verify the app is actually here
-        run: |
-          test -f index.html || { echo "::error::index.html missing from the repo root - Pages would deploy an empty site."; exit 1; }
-          echo "index.html present ($(wc -c < index.html) bytes)."
 
       - name: Verify credentials are present
         env:
@@ -64,10 +58,68 @@ jobs:
             if(ageH>2){ console.error('::error::Feed is '+ageH.toFixed(1)+'h old - it was NOT rewritten.'); process.exit(1); }
           "
 
+      - name: Commit the refreshed feed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- rpt-feed.json; then
+            echo "Feed unchanged; nothing to commit."
+          else
+            git add rpt-feed.json
+            git commit -m "Refresh RPT feed [skip ci]"
+            git push
+          fi
+
+  deploy:
+    needs: sync
+    if: always()                 # publish the app even when the RPT pull failed
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: main              # pick up the feed the sync job just committed
+
+      - name: Verify the app is actually here
+        run: |
+          test -f index.html || { echo "::error::index.html missing from the repo root - Pages would deploy an empty site."; exit 1; }
+          echo "index.html present ($(wc -c < index.html) bytes)."
+
+      - name: Stage only the files the site should serve
+        run: |
+          mkdir _site
+          # Everything in the repo root used to be published, which put the sync script
+          # and its credentials on the public site. Copy the app, exclude server-side
+          # files and build leftovers. Excludes, not an allowlist, so a new image or
+          # icon still ships without editing this workflow.
+          rsync -a ./ _site/ \
+            --exclude '_site/' \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'rpt-sync.js' \
+            --exclude 'accounts.json' \
+            --exclude 'raw-records.json' \
+            --exclude '*.bat' \
+            --exclude '*.yml' \
+            --exclude '*.md' \
+            --exclude 'Pump shop app design*/'
+          echo "Staged:"; ls -la _site
+          for f in rpt-sync.js accounts.json; do
+            if [ -e "_site/$f" ]; then echo "::error::$f would be published."; exit 1; fi
+          done
+          test -f _site/index.html    || { echo "::error::index.html did not make it into _site."; exit 1; }
+          test -f _site/rpt-feed.json || { echo "::error::rpt-feed.json did not make it into _site."; exit 1; }
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deploy
