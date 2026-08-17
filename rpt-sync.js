@@ -18,8 +18,14 @@
  *   RPT_USER, RPT_PASS, RPT_DATE_FMT, RPT_OUT
  */
 
-const USER = process.env.RPT_USER || 'postauto';
-const PASS = process.env.RPT_PASS || 'Postauto0226';
+const USER = process.env.RPT_USER;
+const PASS = process.env.RPT_PASS;
+if (!USER || !PASS) {
+  console.error('RPT_USER and RPT_PASS must be set in the environment.');
+  console.error('Credentials are never hardcoded here: this file is published with the site,');
+  console.error('so anything written into it is readable by anyone with the URL.');
+  process.exit(1);
+}
 const OUT  = process.env.RPT_OUT  || 'rpt-feed.json';
 const BASE = 'https://www.rodpumptracker.com/api';
 
@@ -36,6 +42,15 @@ function fmtDate(d, fmt) {
   return `${y}-${m}-${day}`;
 }
 
+// Strip credentials from any URL before it is printed. Both URL shapes carry them —
+// one in the query string, one as path segments — so blank the values, not the names.
+function scrub(url) {
+  return String(url)
+    .replace(/(vUsername=)[^&]*/i, '$1***')
+    .replace(/(vPassword=)[^&]*/i, '$1***')
+    .replace(new RegExp('/' + encodeURIComponent(USER) + '/' + encodeURIComponent(PASS) + '/', 'g'), '/***/***/');
+}
+
 async function getJson(url, tries) {
   tries = tries || 4;
   let lastErr;
@@ -43,7 +58,7 @@ async function getJson(url, tries) {
     try {
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url.replace(PASS, '***')}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${scrub(url)}`);
       const text = await res.text();
       try { return JSON.parse(text); }
       catch (e) { throw new Error(`Non-JSON response: ${text.slice(0, 120)}`); }
@@ -393,6 +408,25 @@ async function main() {
   if (daysFailed > RANGE * 0.2) console.error(`::warning::${daysFailed}/${RANGE} day requests failed — RPT may be throttling. Lower RPT_CONC.`);
   if (summary.length) console.log(summary.slice(0, 40).join('\n'));
 
+  // Diagnose the failure rather than guessing at it. A uniform status code across every
+  // day is a server- or account-side answer, not a rate limit.
+  if (daysFailed === days.length && days.length > 1) {
+    const codes = {};
+    summary.forEach(function (l) { const m = l.match(/HTTP (\d{3})/); if (m) codes[m[1]] = (codes[m[1]] || 0) + 1; });
+    const only = Object.keys(codes).length === 1 ? Object.keys(codes)[0] : null;
+    if (only === '404') {
+      console.error('\nEvery request returned HTTP 404, on both URL shapes.');
+      console.error('The endpoint ' + ENDPOINTS[0] + ' no longer answers for this account.');
+      console.error('That is an RPT-side change: the route was renamed or removed, or API');
+      console.error('access for this login was turned off. Contact RodPumpTracker support.');
+    } else if (only === '401' || only === '403') {
+      console.error('\nEvery request returned HTTP ' + only + ' - the credentials were rejected.');
+      console.error('Check the RPT_USER / RPT_PASS repository secrets.');
+    } else if (only === '429') {
+      console.error('\nEvery request was rate limited. Lower RPT_CONC and re-run.');
+    }
+  }
+
   if (!anyOk) { console.error('No response from RPT. Check credentials / network.'); process.exit(1); }
 
   // Save the raw merged records so field names / operators can be confirmed.
@@ -439,7 +473,7 @@ async function main() {
   console.log(`Shelf inventory: ${inventory.length} pump(s) ready to run (${pruned} excluded \u2014 already reinstalled).`);
   if (!wells.length) {
     console.log('\n⚠️  No wells returned across the whole range.');
-    console.log('   Login + API address work (server replied). Likely the "postauto" account');
+    console.log('   Login + API address work (server replied). Likely the sync account');
     console.log('   is not linked to wells yet — ask RodPumpTracker support to assign operators to it.');
   }
 }
