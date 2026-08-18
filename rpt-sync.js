@@ -405,7 +405,7 @@ async function main() {
     if (i % (CONC * 20) === 0) console.log(`  ...${Math.min(i + CONC, days.length)}/${days.length} days, ${all.length} records`);
   }
   console.log(`Pulled ${all.length} records across ${daysWithData} day(s) in the last ${RANGE}. Failed days: ${daysFailed}.`);
-  if (daysFailed > RANGE * 0.2) console.error(`::warning::${daysFailed}/${RANGE} day requests failed — RPT may be throttling. Lower RPT_CONC.`);
+  if (daysFailed > RANGE * 0.2) console.error(`::warning::${daysFailed}/${RANGE} day requests failed.`);
   if (summary.length) console.log(summary.slice(0, 40).join('\n'));
 
   // Diagnose the failure rather than guessing at it. A uniform status code across every
