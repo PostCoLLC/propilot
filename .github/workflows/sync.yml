@@ -52,9 +52,9 @@ jobs:
           RPT_OUT: rpt-feed.json
           RPT_CONC: '24'
           # No RPT_DAYS: the script pulls a 14-day window and merges it into
-          # rpt-raw-cache.json.gz, sweeping the full 5 years only on the 1st of
-          # the month or when full_sweep is ticked. Keeps weekly request volume
-          # in the tens instead of ~1,825.
+          # rpt-raw-cache.json.gz. The full 5-year sweep runs only when that cache
+          # is missing or more than 25 days old, or when full_sweep is ticked.
+          # Keeps weekly request volume in the tens instead of ~1,825.
           RPT_FULL: ${{ github.event.inputs.full_sweep == 'true' && '1' || '' }}
         run: node rpt-sync.js
 
@@ -71,10 +71,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- rpt-feed.json rpt-raw-cache.json.gz; then
+          git add -A rpt-feed.json rpt-raw-cache.json.gz
+          if git diff --staged --quiet; then
             echo "Feed unchanged; nothing to commit."
           else
-            git add rpt-feed.json rpt-raw-cache.json.gz
             git commit -m "Refresh RPT feed [skip ci]"
             git push
           fi
