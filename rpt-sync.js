@@ -358,11 +358,27 @@ function extractRecords(pkg) {
 
 async function main() {
   const fs = require('fs');
+  const zlib = require('zlib');
   const dateArg = process.argv[2];
   const baseDay = dateArg ? new Date(dateArg + 'T12:00:00') : new Date();
-  // Sweep a range of days and MERGE every record (RPT returns per-day results).
-  // Default pulls ~5 years of history. Override with RPT_DAYS to change the window.
-  const RANGE = parseInt(process.env.RPT_DAYS || '1825', 10);
+
+  /* ------------------------------------------------------------------
+     Request budget. RPT answers one day per request, so a 1,825-day
+     sweep is ~1,825 calls — which is what set off their monitoring.
+     Normal runs now pull a short trailing window and merge it into a
+     cached copy of everything pulled before; the full sweep runs once
+     a month — on the first scheduled run of the month — or on demand
+     with RPT_FULL=1.
+     ------------------------------------------------------------------ */
+  const CACHE = process.env.RPT_CACHE || 'rpt-raw-cache.json.gz';
+  const cacheExists = fs.existsSync(CACHE);
+  const FULL = process.env.RPT_FULL === '1'
+    || baseDay.getUTCDate() <= 7         // monthly full sweep (runs are weekly, so the 1st is rarely a run day)
+    || !cacheExists;                     // nothing to merge into yet
+  const RANGE = parseInt(process.env.RPT_DAYS || (FULL ? '1825' : '14'), 10);
+  console.log(FULL
+    ? `Full sweep: ${RANGE} day requests${cacheExists ? '' : ' (no cache yet)'}.`
+    : `Rolling window: ${RANGE} day requests, merged into ${CACHE}.`);
   const days = [];
   for (let i = 0; i < RANGE; i++) days.push(new Date(baseDay.getTime() - i * 86400000));
 
@@ -428,6 +444,36 @@ async function main() {
   }
 
   if (!anyOk) { console.error('No response from RPT. Check credentials / network.'); process.exit(1); }
+
+  /* Merge this pull into the cached history, then rebuild the feed from the union.
+     Key on RPT's GlobalId where present so a record revised today replaces the
+     cached copy instead of duplicating it. */
+  const rawKey = function (r) {
+    return r.GlobalId
+      || [r.SerialNo, r.RunDate, r.PullDate, r.Status, r.PumpNo].join('|');
+  };
+  if (!FULL) {
+    try {
+      const cached = JSON.parse(zlib.gunzipSync(fs.readFileSync(CACHE)).toString('utf8'));
+      const seen = {};
+      all.forEach(function (r) { seen[rawKey(r)] = 1; });
+      let kept = 0;
+      (Array.isArray(cached) ? cached : []).forEach(function (r) {
+        if (!seen[rawKey(r)]) { all.push(r); kept++; }
+      });
+      console.log(`Merged ${kept} cached record(s) with ${Object.keys(seen).length} from this pull.`);
+    } catch (e) {
+      console.error(`::warning::Could not read ${CACHE} (${e.message}). Re-run with RPT_FULL=1 to rebuild it.`);
+      process.exit(1);
+    }
+  }
+  try {
+    const dedup = {};
+    all.forEach(function (r) { dedup[rawKey(r)] = r; });
+    const uniq = Object.keys(dedup).map(function (k) { return dedup[k]; });
+    fs.writeFileSync(CACHE, zlib.gzipSync(Buffer.from(JSON.stringify(uniq)), { level: 9 }));
+    console.log(`Cached ${uniq.length} raw record(s) to ${CACHE}.`);
+  } catch (e) { console.error(`::warning::Could not write ${CACHE}: ${e.message}`); }
 
   // Save the raw merged records so field names / operators can be confirmed.
   // Raw dump is debug-only — it can reach 150 MB+. Enable with RPT_RAW=1.
