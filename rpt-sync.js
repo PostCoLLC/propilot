@@ -367,14 +367,28 @@ async function main() {
      sweep is ~1,825 calls — which is what set off their monitoring.
      Normal runs now pull a short trailing window and merge it into a
      cached copy of everything pulled before; the full sweep runs once
-     a month — on the first scheduled run of the month — or on demand
+     a month (whenever the cache is more than 25 days old) or on demand
      with RPT_FULL=1.
      ------------------------------------------------------------------ */
   const CACHE = process.env.RPT_CACHE || 'rpt-raw-cache.json.gz';
-  const cacheExists = fs.existsSync(CACHE);
+  // The cache carries the date of its own last full sweep, and that date decides the
+  // next one. A calendar test never fires reliably on a weekly schedule, and file
+  // mtime is useless here: a CI checkout stamps every file with the checkout time.
+  let cachedRaw = null, sweptAt = null;
+  if (fs.existsSync(CACHE)) {
+    try {
+      const c = JSON.parse(zlib.gunzipSync(fs.readFileSync(CACHE)).toString('utf8'));
+      if (Array.isArray(c)) cachedRaw = c;                       // pre-2026-08-31 format, no stamp
+      else if (c && Array.isArray(c.records)) { cachedRaw = c.records; sweptAt = c.sweptAt || null; }
+    } catch (e) {
+      console.error(`::warning::Could not read ${CACHE} (${e.message}); falling back to a full sweep.`);
+    }
+  }
+  const cacheExists = !!cachedRaw;
+  const sweepAgeDays = sweptAt ? (Date.now() - new Date(sweptAt).getTime()) / 86400000 : Infinity;
   const FULL = process.env.RPT_FULL === '1'
-    || baseDay.getUTCDate() <= 7         // monthly full sweep (runs are weekly, so the 1st is rarely a run day)
-    || !cacheExists;                     // nothing to merge into yet
+    || !cacheExists                      // nothing to merge into yet
+    || sweepAgeDays > 25;                // rebuild history about once a month
   const RANGE = parseInt(process.env.RPT_DAYS || (FULL ? '1825' : '14'), 10);
   console.log(FULL
     ? `Full sweep: ${RANGE} day requests${cacheExists ? '' : ' (no cache yet)'}.`
@@ -453,26 +467,19 @@ async function main() {
       || [r.SerialNo, r.RunDate, r.PullDate, r.Status, r.PumpNo].join('|');
   };
   if (!FULL) {
-    try {
-      const cached = JSON.parse(zlib.gunzipSync(fs.readFileSync(CACHE)).toString('utf8'));
-      const seen = {};
-      all.forEach(function (r) { seen[rawKey(r)] = 1; });
-      let kept = 0;
-      (Array.isArray(cached) ? cached : []).forEach(function (r) {
-        if (!seen[rawKey(r)]) { all.push(r); kept++; }
-      });
-      console.log(`Merged ${kept} cached record(s) with ${Object.keys(seen).length} from this pull.`);
-    } catch (e) {
-      console.error(`::warning::Could not read ${CACHE} (${e.message}). Re-run with RPT_FULL=1 to rebuild it.`);
-      process.exit(1);
-    }
+    const seen = {};
+    all.forEach(function (r) { seen[rawKey(r)] = 1; });
+    let kept = 0;
+    cachedRaw.forEach(function (r) { if (!seen[rawKey(r)]) { all.push(r); kept++; } });
+    console.log(`Merged ${kept} cached record(s) with ${Object.keys(seen).length} from this pull.`);
   }
   try {
     const dedup = {};
     all.forEach(function (r) { dedup[rawKey(r)] = r; });
     const uniq = Object.keys(dedup).map(function (k) { return dedup[k]; });
-    fs.writeFileSync(CACHE, zlib.gzipSync(Buffer.from(JSON.stringify(uniq)), { level: 9 }));
-    console.log(`Cached ${uniq.length} raw record(s) to ${CACHE}.`);
+    const sweep = FULL ? new Date().toISOString() : (sweptAt || new Date().toISOString());
+    fs.writeFileSync(CACHE, zlib.gzipSync(Buffer.from(JSON.stringify({ sweptAt: sweep, records: uniq })), { level: 9 }));
+    console.log(`Cached ${uniq.length} raw record(s) to ${CACHE} (last full sweep ${sweep.slice(0, 10)}).`);
   } catch (e) { console.error(`::warning::Could not write ${CACHE}: ${e.message}`); }
 
   // Save the raw merged records so field names / operators can be confirmed.
