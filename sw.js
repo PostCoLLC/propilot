@@ -1,5 +1,5 @@
 /* Pro Pilot offline service worker — network-first for the app page, cache-first for assets */
-const CACHE = 'propilot-v62';
+const CACHE = 'propilot-v63';
 /* Origins that serve per-user or short-lived data. Requests to these never touch the cache:
    the photos API is scoped to the signed-in operator, and SharePoint thumbnail URLs are
    pre-authenticated and expire — a cached one comes back 403 later. Everything else
