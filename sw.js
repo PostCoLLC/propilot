@@ -1,5 +1,16 @@
 /* Pro Pilot offline service worker — network-first for the app page, cache-first for assets */
-const CACHE = 'propilot-v61';
+const CACHE = 'propilot-v62';
+/* Origins that serve per-user or short-lived data. Requests to these never touch the cache:
+   the photos API is scoped to the signed-in operator, and SharePoint thumbnail URLs are
+   pre-authenticated and expire — a cached one comes back 403 later. Everything else
+   cross-origin (the MSAL script, font files) is a static asset and must stay cacheable, or the
+   app cannot start offline. */
+const DATA_ORIGINS = [
+  'https://propilot-api-dxa5bzd2e8aqcbgm.westus3-01.azurewebsites.net',
+  'https://graph.microsoft.com',
+  'https://postcompanies.sharepoint.com',
+  'https://postcompanies-my.sharepoint.com'
+];
 const CORE = [
   './', 'index.html', 'support.js',
   'assets/hero-shop.jpg', 'assets/facility.jpg', 'assets/svc-build.jpg',
@@ -25,6 +36,14 @@ function isAppShell(req) {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  // Never handle per-user data. Photos are scoped to the signed-in operator and must not land in
+  // a cache that a second person on the same phone could read back offline.
+  try {
+    if (req.headers.get('authorization')) return;
+    const origin = new URL(req.url).origin;
+    if (DATA_ORIGINS.indexOf(origin) !== -1) return;
+    if (/\.sharepoint\.com$/.test(new URL(req.url).hostname)) return;
+  } catch (_) { return; }
   // Network-first for the app page and the well feed so the newest build and data always load
   // when online; a cached feed only ever answers offline.
   if (isAppShell(req) || /rpt-feed\.json$/.test(new URL(req.url).pathname)) {
