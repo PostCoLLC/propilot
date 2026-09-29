@@ -6,7 +6,7 @@ name: Sync RPT feed and deploy
 
 on:
   schedule:
-    - cron: '0 14 * * 1'          # once a week, Monday 14:00 UTC
+    - cron: '17 9 * * 1'          # Monday 4:17 AM Central
   workflow_dispatch:
     inputs:
       full_sweep:
