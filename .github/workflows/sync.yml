@@ -1,12 +1,12 @@
 name: Sync RPT feed and deploy
 
-# Two jobs on purpose. The RPT pull and the site deploy used to be one job, so any RPT
-# outage also blocked publishing app fixes. Now `deploy` runs even when `sync` fails —
-# it just publishes the feed already in the repo.
+# Paste over .github/workflows/sync.yml in PostCoLLC/propilot. This is the live file with
+# two changes: the schedule, and accounts.json comes from the ACCOUNTS_JSON secret. Do NOT use "WORKFLOW - paste into .github-workflows-sync.yml.txt"
+# yet — that is the private-feed cutover version and takes the wells screen down.
 
 on:
   schedule:
-    - cron: '17 9 * * 1'          # Monday 4:17 AM Central
+    - cron: '17 9 * * 1'          # Monday 09:17 UTC (4:17 AM Central) - lands before the workday even if GitHub runs it late
   workflow_dispatch:
     inputs:
       full_sweep:
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: rpt-sync            # not the pages group: a manual run must not kill a scheduled one
+      group: rpt-sync
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -45,16 +45,27 @@ jobs:
           fi
           echo "Credentials present."
 
+      - name: Write accounts.json from the ACCOUNTS_JSON secret
+        env:
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+        run: |
+          # The account map is not kept in the repo (the repo is public). It lives in a secret,
+          # is written here for rpt-sync.js, and is never committed or published.
+          if [ -z "$ACCOUNTS_JSON" ]; then
+            echo "::error::ACCOUNTS_JSON secret is not set. Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          printf '%s' "$ACCOUNTS_JSON" > accounts.json
+          node -e "JSON.parse(require('fs').readFileSync('accounts.json','utf8'))" \
+            || { echo "::error::ACCOUNTS_JSON is not valid JSON."; exit 1; }
+          echo "accounts.json written from secret."
+
       - name: Pull RPT data and rebuild feed
         env:
           RPT_USER: ${{ secrets.RPT_USER }}
           RPT_PASS: ${{ secrets.RPT_PASS }}
           RPT_OUT: rpt-feed.json
           RPT_CONC: '24'
-          # No RPT_DAYS: the script pulls a 14-day window and merges it into
-          # rpt-raw-cache.json.gz. The full 5-year sweep runs only when that cache
-          # is missing or more than 25 days old, or when full_sweep is ticked.
-          # Keeps weekly request volume in the tens instead of ~1,825.
           RPT_FULL: ${{ github.event.inputs.full_sweep == 'true' && '1' || '' }}
         run: node rpt-sync.js
 
@@ -81,7 +92,7 @@ jobs:
 
   deploy:
     needs: sync
-    if: always()                 # publish the app even when the RPT pull failed
+    if: always()
     runs-on: ubuntu-latest
     concurrency:
       group: pages
@@ -93,7 +104,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: main              # pick up the feed the sync job just committed
+          ref: main
 
       - name: Verify the app is actually here
         run: |
@@ -103,10 +114,6 @@ jobs:
       - name: Stage only the files the site should serve
         run: |
           mkdir _site
-          # Everything in the repo root used to be published, which put the sync script
-          # and its credentials on the public site. Copy the app, exclude server-side
-          # files and build leftovers. Excludes, not an allowlist, so a new image or
-          # icon still ships without editing this workflow.
           rsync -a ./ _site/ \
             --exclude '_site/' \
             --exclude '.git/' \
